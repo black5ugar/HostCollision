@@ -41,7 +41,7 @@ func init() {
 	}
 
 	log.SetOutput(logFile)
-	log.SetPrefix("[HostCollison]")
+	log.SetPrefix("[HostCollision]")
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 }
