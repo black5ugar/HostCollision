@@ -142,7 +142,7 @@ func main() {
 					}
 
 					// 对比1，3 的结果
-					sim1 := lib.ContentSim(resp1Temp.Content, resp2Temp.Content)
+					sim1 := lib.ContentSim(resp1Temp.Content, resp3.Content)
 
 					// 对比2，3 的结果
 					sim2 := lib.ContentSim(resp2Temp.Content, resp3.Content)
