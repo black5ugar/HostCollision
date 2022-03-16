@@ -53,6 +53,7 @@ func main() {
 	//
 	var opt Options
 	p := flags.NewParser(&opt, flags.Default)
+	p.Usage = "Host 碰撞/爆破/扫描"
 	_, err := p.ParseArgs(os.Args[1:])
 	if err != nil {
 		log.Fatal("Parse error:", err)
