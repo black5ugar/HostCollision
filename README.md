@@ -40,4 +40,4 @@ www.bbb.com
 ```
 
 ## 截图
-![Demo][./image/demo.png]
+![Demo](./image/demo.png)
