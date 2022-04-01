@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"time"
 )
@@ -28,6 +29,15 @@ func SendRequest(protocol, ip, host string) (Resp, error) {
 	// 跳过TLS
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		Dial: func(netw, addr string) (net.Conn, error) {
+			conn, err := net.DialTimeout(netw, addr, time.Second*3)
+			if err != nil {
+				return nil, err
+			}
+			conn.SetDeadline(time.Now().Add(time.Second * 2))
+			return conn, nil
+		},
+		ResponseHeaderTimeout: time.Second * 2,
 	}
 
 	// 设置5秒超时
