@@ -1,17 +1,17 @@
-package lib
+package banner
 
 import (
 	"fmt"
-	"log"
 
 	"github.com/fatih/color"
 )
 
-const Version = "1.0.2"
+const Version = "1.0.3"
 const Author = "black5ugar"
 const GitHub = "https://github.com/black5ugar/HostCollision"
 
-func Banner() {
+// Print shows the application banner in the console.
+func Print() {
 	banner := fmt.Sprintf(`
 
  ██      ██   ███████    ████████ ██████████   ██████    ███████   ██       ██       ██  ████████ ██   ███████   ████     ██
@@ -26,8 +26,7 @@ func Banner() {
 Version: %s 
 Author: %s 
 Github: %s
-	`, Version, Author, GitHub)
+`, Version, Author, GitHub)
 
 	color.HiBlue(banner)
-	log.Println(banner)
 }
