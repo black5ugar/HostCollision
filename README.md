@@ -7,7 +7,7 @@ It is commonly used in penetration testing to detect websites behind reverse pro
 
 This version is a fully refactored and modularized implementation based on the original project.
 
----
+
 
 ## ✨ Features
 
@@ -18,7 +18,7 @@ This version is a fully refactored and modularized implementation based on the o
 - ⚙️ **Configurable parameters** (threads, sleep, threshold, max hits per IP…)  
 - 🎨 **Beautiful CLI banner**
 
----
+
 
 ## 📦 Installation
 
@@ -27,6 +27,8 @@ go build -o hostcollision ./cmd/hostcollision
 ```
 
 Or download from release
+
+
 
 ## 🧪 Example Usage
 
@@ -41,6 +43,8 @@ Or download from release
   -r 85
 ```
 
+
+
 ## 🗂 Command-line Options
 
 
@@ -53,6 +57,7 @@ Or download from release
 | `-s`   | Sleep between requests in ms (default 1000) |
 | `-m`   | Max successful hosts per IP (default 50)    |
 | `-r`   | Similarity threshold (0–100, default 85)    |
+
 
 
 ## 📤 Output
