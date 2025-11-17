@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hostCollision/internal/model"
 	"io"
+	"log"
 	"net/http"
 	"time"
 )
@@ -24,6 +25,8 @@ func (s *Scanner) worker(ctx context.Context, tasks <-chan task, results chan<- 
 			}
 
 			if s.reachedLimit(t.IP) {
+				log.Printf("[SKIP-LIMIT] ip=%s host=%s reason=max hosts per IP reached (%d)",
+					t.IP, t.Host, s.cfg.MaxHostsPerIP)
 				continue
 			}
 
@@ -38,10 +41,15 @@ func (s *Scanner) worker(ctx context.Context, tasks <-chan task, results chan<- 
 			res := s.processTarget(ctx, t)
 
 			if res.Error != nil {
+				log.Printf("[SKIP] ip=%s host=%s status=%d duration=%dms similar=%d error=%v",
+					res.IP, res.Host, res.Status, res.Duration, res.Similar, res.Error)
 				continue
 			}
 
 			s.incrementSuccess(t.IP)
+
+			log.Printf("[OK]   ip=%s host=%s status=%d duration=%dms length=%d similar=%d",
+				res.IP, res.Host, res.Status, res.Duration, res.Length, res.Similar)
 
 			select {
 			case <-ctx.Done():
@@ -59,12 +67,15 @@ func (s *Scanner) worker(ctx context.Context, tasks <-chan task, results chan<- 
 func (s *Scanner) processTarget(ctx context.Context, t task) model.Result {
 	url := fmt.Sprintf("http://%s/", string(t.IP))
 
+	start := time.Now()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return model.Result{
-			IP:    t.IP,
-			Host:  t.Host,
-			Error: fmt.Errorf("create request: %w", err),
+			IP:       t.IP,
+			Host:     t.Host,
+			Error:    fmt.Errorf("create request: %w", err),
+			Duration: time.Since(start).Milliseconds(),
 		}
 	}
 
@@ -75,9 +86,10 @@ func (s *Scanner) processTarget(ctx context.Context, t task) model.Result {
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return model.Result{
-			IP:    t.IP,
-			Host:  t.Host,
-			Error: fmt.Errorf("execute request: %w", err),
+			IP:       t.IP,
+			Host:     t.Host,
+			Error:    fmt.Errorf("execute request: %w", err),
+			Duration: time.Since(start).Milliseconds(),
 		}
 	}
 	defer resp.Body.Close()
@@ -85,9 +97,10 @@ func (s *Scanner) processTarget(ctx context.Context, t task) model.Result {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return model.Result{
-			IP:    t.IP,
-			Host:  t.Host,
-			Error: fmt.Errorf("read response body: %w", err),
+			IP:       t.IP,
+			Host:     t.Host,
+			Error:    fmt.Errorf("read response body: %w", err),
+			Duration: time.Since(start).Milliseconds(),
 		}
 	}
 
@@ -97,15 +110,16 @@ func (s *Scanner) processTarget(ctx context.Context, t task) model.Result {
 		Status:   resp.StatusCode,
 		Length:   len(body),
 		BodyHash: bodyHash(body),
+		Duration: time.Since(start).Milliseconds(),
 	}
 
-	// Status code filter: treat 2xx and 3xx as candidates.
+	// Status code filter.
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		result.Error = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 		return result
 	}
 
-	// Similarity filter: compare against per-IP baseline response.
+	// Similarity filter.
 	score := s.similarityForIP(t.IP, body)
 	result.Similar = score
 

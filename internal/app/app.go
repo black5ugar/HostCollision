@@ -27,23 +27,6 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("execute scan: %w", err)
 	}
 
-	// Print results to stdout in a simple table format.
-	if len(results) > 0 {
-		fmt.Println("IP,HOST,STATUS,LENGTH,SIMILAR")
-		for _, r := range results {
-			fmt.Printf(
-				"%s,%s,%d,%d,%d\n",
-				r.IP,
-				r.Host,
-				r.Status,
-				r.Length,
-				r.Similar,
-			)
-		}
-	} else {
-		fmt.Println("No valid results found.")
-	}
-
 	if err := iohelper.WriteResults(cfg.OutputFile, results); err != nil {
 		return fmt.Errorf("write results: %w", err)
 	}

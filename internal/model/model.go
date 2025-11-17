@@ -21,5 +21,6 @@ type Result struct {
 	Similar int  // Similarity score in percentage (0-100).
 
 	BodyHash string // Optional hash of the response body for deduplication.
+	Duration int64  // Request duration in milliseconds.
 	Error    error  // Error encountered during the request, if any.
 }
