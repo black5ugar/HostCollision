@@ -1,7 +1,10 @@
 *.txt
 log/
+
+# Go build artifacts
 /main
-/main.exe
 /hostCollision
 /HostCollision
 /hostcollision
+/*.exe
+/*.test
