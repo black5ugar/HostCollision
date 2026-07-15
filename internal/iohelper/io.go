@@ -97,5 +97,8 @@ func readNonEmptyLines(path string) ([]string, error) {
 		return nil, fmt.Errorf("read file %q: %w", path, err)
 	}
 
+	if len(lines) == 0 {
+		return nil, fmt.Errorf("file %q contains no entries", path)
+	}
 	return lines, nil
 }

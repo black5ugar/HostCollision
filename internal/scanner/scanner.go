@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const baselineHost = "hostcollision-baseline.invalid"
+
 // Scanner coordinates the host collision scan across IP and host targets.
 type Scanner struct {
 	cfg config.Config
@@ -31,8 +33,16 @@ type task struct {
 
 // NewScanner creates a new Scanner with the given configuration.
 func NewScanner(cfg config.Config) *Scanner {
+	if cfg.Goroutines < 1 {
+		cfg.Goroutines = 1
+	}
 	client := &http.Client{
 		Timeout: 10 * time.Second,
+		// A redirect may point at an unrelated host. Keep every probe pinned to
+		// the target IP and evaluate the redirect response itself.
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 
 	return &Scanner{
@@ -51,6 +61,10 @@ func Scan(ctx context.Context, ips []model.IP, hosts []model.Host, cfg config.Co
 
 // Scan executes the host collision process for all IP and host combinations.
 func (s *Scanner) Scan(ctx context.Context, ips []model.IP, hosts []model.Host) ([]model.Result, error) {
+	if err := s.loadBaselines(ctx, ips); err != nil {
+		return nil, err
+	}
+
 	tasks := make(chan task)
 	results := make(chan model.Result)
 
@@ -89,7 +103,51 @@ func (s *Scanner) Scan(ctx context.Context, ips []model.IP, hosts []model.Host) 
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// loadBaselines probes each IP with a deliberately invalid hostname. This
+// prevents a real dictionary entry from being consumed as the baseline.
+func (s *Scanner) loadBaselines(ctx context.Context, ips []model.IP) error {
+	jobs := make(chan model.IP)
+	var wg sync.WaitGroup
+	workers := s.cfg.Goroutines
+	if workers > len(ips) {
+		workers = len(ips)
+	}
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ip := range jobs {
+				body, err := s.fetchBody(ctx, task{IP: ip, Host: model.Host(baselineHost)})
+				if err != nil {
+					// A missing baseline should not make the target unscannable.
+					// Its candidates will receive similarity zero.
+					continue
+				}
+				s.muBaseline.Lock()
+				s.baselineByIP[ip] = append([]byte(nil), body...)
+				s.muBaseline.Unlock()
+			}
+		}()
+	}
+
+	for _, ip := range ips {
+		select {
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return ctx.Err()
+		case jobs <- ip:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	return ctx.Err()
 }
 
 // reachedLimit reports whether the maximum number of successful hosts
@@ -101,11 +159,16 @@ func (s *Scanner) reachedLimit(ip model.IP) bool {
 	return s.successPerIP[ip] >= s.cfg.MaxHostsPerIP
 }
 
-// incrementSuccess increments the successful host count for the given IP.
-func (s *Scanner) incrementSuccess(ip model.IP) {
+// claimSuccess reserves a result slot without allowing concurrent workers to
+// exceed the configured per-IP limit.
+func (s *Scanner) claimSuccess(ip model.IP) bool {
 	s.muSuccess.Lock()
+	defer s.muSuccess.Unlock()
+	if s.successPerIP[ip] >= s.cfg.MaxHostsPerIP {
+		return false
+	}
 	s.successPerIP[ip]++
-	s.muSuccess.Unlock()
+	return true
 }
 
 // similarityForIP returns the similarity score between the baseline response
@@ -117,10 +180,7 @@ func (s *Scanner) similarityForIP(ip model.IP, body []byte) int {
 
 	base, ok := s.baselineByIP[ip]
 	if !ok {
-		copied := make([]byte, len(body))
-		copy(copied, body)
-		s.baselineByIP[ip] = copied
-		return 100
+		return 0
 	}
 
 	return similarity.Score(base, body)

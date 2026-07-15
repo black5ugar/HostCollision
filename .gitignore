@@ -1,7 +1,7 @@
 *.txt
 log/
-main
-main.exe
-hostCollision
-HostCollision
-hostcollision
+/main
+/main.exe
+/hostCollision
+/HostCollision
+/hostcollision

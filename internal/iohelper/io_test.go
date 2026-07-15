@@ -93,7 +93,7 @@ func TestWriteResults(t *testing.T) {
 		}
 	}
 
-	if lines != len(results) {
-		t.Fatalf("expected %d lines, got %d", len(results), lines)
+	if lines != len(results)+1 {
+		t.Fatalf("expected %d lines, got %d", len(results)+1, lines)
 	}
 }

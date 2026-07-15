@@ -12,21 +12,28 @@ This version is a fully refactored and modularized implementation based on the o
 ## ✨ Features
 
 - 🚀 **High-speed scanning** powered by goroutine worker pool  
-- 🧠 **Similarity detection** to filter out generic/wildcard/default pages  
+- 🧠 **Dedicated baseline probes** to filter out generic/wildcard/default pages without consuming a real candidate
 - 📝 **Real-time terminal logs** showing status code, duration, and similarity  
 - 📄 **CSV result output** for better data analysis  
 - ⚙️ **Configurable parameters** (threads, sleep, threshold, max hits per IP…)  
+- 🛡️ **Safer HTTP handling** with redirect blocking, cancellation support, and a 10 MiB response limit
 - 🎨 **Beautiful CLI banner**
 
 
 
 ## 📦 Installation
 
+Go 1.18 or later is required.
+
 ```bash
-go build -o hostcollision ./cmd/hostcollision  
+go build -o hostcollision ./cmd/hostcollision
 ```
 
-Or download from release
+Run the tests with:
+
+```bash
+go test ./...
+```
 
 
 
@@ -55,7 +62,7 @@ Or download from release
 | `-o`   | Output CSV file path (required)             |
 | `-n`   | Number of goroutines (default 20)           |
 | `-s`   | Sleep between requests in ms (default 1000) |
-| `-m`   | Max successful hosts per IP (default 50)    |
+| `-m`   | Max retained hosts per IP (default 50)      |
 | `-r`   | Similarity threshold (0–100, default 85)    |
 
 
@@ -77,6 +84,10 @@ ip,host,status,length,similar
 `length`  – response body length (bytes)
 
 `similar` – similarity score (0–100) compared to baseline for that IP
+
+Only responses with status codes from 200 through 399 and similarity below the configured threshold are retained. Before scanning the dictionary, HostCollision sends `Host: hostcollision-baseline.invalid` to each IP and uses that response as the default-page baseline. Baseline probes run with the configured concurrency limit.
+
+For safety, redirects are not followed, response bodies larger than 10 MiB are rejected, and `Ctrl+C` cancels outstanding requests. If a baseline probe fails, candidates for that IP are still scanned with a similarity score of `0`.
 
 
 
@@ -100,7 +111,13 @@ This is a simple way to verify the tool works end-to-end on your machine.
 
 3. **Run a simple HTTP server** (example)
 
-   You can write a small Go HTTP server that returns different content based on `r.Host`, or use any web server with multiple vhosts bound to `127.0.0.1 ` (provided in the testserver dirctory)
+   The repository includes a sample server in `testserver/`. It listens on port 80, which may require elevated privileges:
+
+   ```bash
+   go run ./testserver
+   ```
+
+   You can also use any HTTP server that returns different content based on the `Host` header. A target entry may include a port, for example `127.0.0.1:8080`.
 
 4. **Start scanning**
 
@@ -155,9 +172,11 @@ HostCollision 是一个通过自定义 `Host` 头，对目标 IP 进行批量请
 
 - 🚀 **高并发扫描**：基于 goroutine 的 worker pool
 - 🧠 **响应相似度检测**：过滤统一错误页 / 默认页 / 泛解析内容
+- 🎯 **独立基准探测**：使用专门的无效 Host 获取基准，不占用真实字典候选
 - 📡 **终端实时日志**：显示 IP、Host、状态码、耗时、相似度、过滤原因
 - 📄 **CSV 结果输出**：带表头，方便后续用 Excel / 脚本分析
 - ⚙️ **可配置参数**：线程数、请求间隔、相似度阈值、每 IP 最大命中数等
+- 🛡️ **安全的 HTTP 处理**：禁止跨目标重定向、支持取消，并限制响应体大小
 
 
 
@@ -165,11 +184,17 @@ HostCollision 是一个通过自定义 `Host` 头，对目标 IP 进行批量请
 
 ## 📦 安装方式
 
-```
+需要 Go 1.18 或更高版本。
+
+```bash
 go build -o hostcollision ./cmd/hostcollision
 ```
 
-或者从 Release 页面下载已编译好的二进制文件.
+运行测试：
+
+```bash
+go test ./...
+```
 
 
 
@@ -200,7 +225,7 @@ go build -o hostcollision ./cmd/hostcollision
 | `-o` | 输出 CSV 文件路径（必选）                                    |
 | `-n` | 并发 goroutine 数量（默认 `20`）                             |
 | `-s` | 每次请求间的 sleep（毫秒，默认 `1000`）                      |
-| `-m` | 单个 IP 最多保留的成功 Host 数（默认 `50`）                  |
+| `-m` | 单个 IP 最多保留的 Host 数（默认 `50`）                      |
 | `-r` | 相似度阈值（0–100，默认 `85`，大于等于该值认为“过于相似”而被过滤） |
 
 
@@ -222,6 +247,10 @@ ip,host,status,length,similar
 - `length`  – 响应 Body 长度（字节）
 - `similar` – 与该 IP 基准响应的相似度（0–100）
 
+程序仅保留状态码为 200–399 且相似度低于指定阈值的响应。扫描字典前，HostCollision 会向每个 IP 发送一次 `Host: hostcollision-baseline.invalid` 请求，以其响应作为默认页面基准；基准请求同样受并发数限制。
+
+为避免请求离开扫描范围，程序不会跟随重定向；超过 10 MiB 的响应体会被拒绝，按 `Ctrl+C` 可取消尚未完成的请求。如果某个 IP 的基准请求失败，该 IP 仍会继续扫描，候选响应的相似度记为 `0`。
+
 
 
 ## 🧪 最小本地测试环境
@@ -240,9 +269,15 @@ www.bbb.com
 www.ccc.com
 ```
 
-3. **启动本地 HTTP 服务** (可看testserver/目录)
+3. **启动本地 HTTP 服务**（参见 `testserver/`）
 
-例如使用一个简单的 Go HTTP 服务，根据 `r.Host` 返回不同页面，或使用一个配置了多个 vhost 的 Web 服务器，均监听在 `127.0.0.1`。
+示例服务监听 80 端口，可能需要额外权限：
+
+```bash
+go run ./testserver
+```
+
+也可以使用其他根据 `Host` 头返回不同页面的 HTTP 服务。IP 列表支持携带端口，例如 `127.0.0.1:8080`。
 
 4. **执行扫描**
 
