@@ -1,4 +1,5 @@
 *.txt
+!vendor/modules.txt
 log/
 
 # Go build artifacts
