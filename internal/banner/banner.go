@@ -6,7 +6,7 @@ import (
 	"github.com/fatih/color"
 )
 
-const Version = "1.0.4"
+const Version = "1.0.5"
 const Author = "black5ugar"
 const GitHub = "https://github.com/black5ugar/HostCollision"
 
