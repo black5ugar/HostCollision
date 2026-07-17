@@ -42,15 +42,18 @@ func ReadHosts(path string) ([]model.Host, error) {
 
 // WriteResults writes scan results to the specified file in CSV format.
 // The first row contains the header: ip, host, status, length, similar.
-func WriteResults(path string, results []model.Result) error {
+func WriteResults(path string, results []model.Result) (returnErr error) {
 	file, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("open output file %q: %w", path, err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); returnErr == nil && err != nil {
+			returnErr = fmt.Errorf("close output file %q: %w", path, err)
+		}
+	}()
 
 	writer := csv.NewWriter(file)
-	defer writer.Flush()
 
 	// Header row.
 	if err := writer.Write([]string{"ip", "host", "status", "length", "similar"}); err != nil {
@@ -68,6 +71,11 @@ func WriteResults(path string, results []model.Result) error {
 		if err := writer.Write(record); err != nil {
 			return fmt.Errorf("write result for %s %s: %w", r.IP, r.Host, err)
 		}
+	}
+
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return fmt.Errorf("flush output file %q: %w", path, err)
 	}
 
 	return nil

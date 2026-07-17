@@ -17,12 +17,13 @@ type Scanner struct {
 	cfg config.Config
 
 	httpClient *http.Client
+	scanMu     sync.Mutex
 
 	muSuccess    sync.Mutex
 	successPerIP map[model.IP]int
 
 	muBaseline   sync.Mutex
-	baselineByIP map[model.IP][]byte
+	baselineByIP map[model.IP]probeResponse
 }
 
 // task represents one scanning unit consisting of an IP and a host.
@@ -49,7 +50,7 @@ func NewScanner(cfg config.Config) *Scanner {
 		cfg:          cfg,
 		httpClient:   client,
 		successPerIP: make(map[model.IP]int),
-		baselineByIP: make(map[model.IP][]byte),
+		baselineByIP: make(map[model.IP]probeResponse),
 	}
 }
 
@@ -61,6 +62,13 @@ func Scan(ctx context.Context, ips []model.IP, hosts []model.Host, cfg config.Co
 
 // Scan executes the host collision process for all IP and host combinations.
 func (s *Scanner) Scan(ctx context.Context, ips []model.IP, hosts []model.Host) ([]model.Result, error) {
+	// A Scanner may be reused, but two scans on the same instance must not
+	// share counters or baselines. Serialize scans so resetting that state is
+	// safe and deterministic.
+	s.scanMu.Lock()
+	defer s.scanMu.Unlock()
+	s.resetScanState()
+
 	if err := s.loadBaselines(ctx, ips); err != nil {
 		return nil, err
 	}
@@ -109,6 +117,16 @@ func (s *Scanner) Scan(ctx context.Context, ips []model.IP, hosts []model.Host) 
 	return out, nil
 }
 
+func (s *Scanner) resetScanState() {
+	s.muSuccess.Lock()
+	s.successPerIP = make(map[model.IP]int)
+	s.muSuccess.Unlock()
+
+	s.muBaseline.Lock()
+	s.baselineByIP = make(map[model.IP]probeResponse)
+	s.muBaseline.Unlock()
+}
+
 // loadBaselines probes each IP with a deliberately invalid hostname. This
 // prevents a real dictionary entry from being consumed as the baseline.
 func (s *Scanner) loadBaselines(ctx context.Context, ips []model.IP) error {
@@ -123,14 +141,15 @@ func (s *Scanner) loadBaselines(ctx context.Context, ips []model.IP) error {
 		go func() {
 			defer wg.Done()
 			for ip := range jobs {
-				body, err := s.fetchBody(ctx, task{IP: ip, Host: model.Host(baselineHost)})
+				response, err := s.fetchResponse(ctx, task{IP: ip, Host: model.Host(baselineHost)})
 				if err != nil {
 					// A missing baseline should not make the target unscannable.
 					// Its candidates will receive similarity zero.
 					continue
 				}
+				response.body = append([]byte(nil), response.body...)
 				s.muBaseline.Lock()
-				s.baselineByIP[ip] = append([]byte(nil), body...)
+				s.baselineByIP[ip] = response
 				s.muBaseline.Unlock()
 			}
 		}()
@@ -171,17 +190,26 @@ func (s *Scanner) claimSuccess(ip model.IP) bool {
 	return true
 }
 
-// similarityForIP returns the similarity score between the baseline response
-// for the given IP and the provided body. The first successful response for
-// an IP is used as the baseline.
-func (s *Scanner) similarityForIP(ip model.IP, body []byte) int {
+// similarityForIP returns the similarity score between the dedicated baseline
+// response for the given IP and the candidate response. Redirect metadata is
+// significant because redirects commonly have an empty or generic body.
+func (s *Scanner) similarityForIP(ip model.IP, candidate probeResponse) int {
 	s.muBaseline.Lock()
-	defer s.muBaseline.Unlock()
-
 	base, ok := s.baselineByIP[ip]
+	s.muBaseline.Unlock()
 	if !ok {
 		return 0
 	}
 
-	return similarity.Score(base, body)
+	if isRedirect(base.status) || isRedirect(candidate.status) {
+		if base.status != candidate.status || base.location != candidate.location {
+			return 0
+		}
+	}
+
+	return similarity.Score(base.body, candidate.body)
+}
+
+func isRedirect(status int) bool {
+	return status >= http.StatusMultipleChoices && status < http.StatusBadRequest
 }

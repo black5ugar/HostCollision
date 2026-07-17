@@ -16,7 +16,7 @@ This version is a fully refactored and modularized implementation based on the o
 - 📝 **Real-time terminal logs** showing status code, duration, and similarity  
 - 📄 **CSV result output** for better data analysis  
 - ⚙️ **Configurable parameters** (threads, sleep, threshold, max hits per IP…)  
-- 🛡️ **Safer HTTP handling** with redirect blocking, cancellation support, and a 10 MiB response limit
+- 🛡️ **Safer HTTP handling** with redirect blocking, redirect-aware fingerprints, cancellation support, and a 10 MiB response limit
 - 🎨 **Beautiful CLI banner**
 
 
@@ -85,7 +85,7 @@ ip,host,status,length,similar
 
 `similar` – similarity score (0–100) compared to baseline for that IP
 
-Only responses with status codes from 200 through 399 and similarity below the configured threshold are retained. Before scanning the dictionary, HostCollision sends `Host: hostcollision-baseline.invalid` to each IP and uses that response as the default-page baseline. Baseline probes run with the configured concurrency limit.
+Only responses with status codes from 200 through 399 and similarity below the configured threshold are retained. Before scanning the dictionary, HostCollision sends `Host: hostcollision-baseline.invalid` to each IP and uses that response as the default-page baseline. Baseline probes run with the configured concurrency limit. Response bodies are used for the normal similarity score; for redirects, the status code and `Location` header are also compared so that different empty-body redirects are not incorrectly treated as identical.
 
 For safety, redirects are not followed, response bodies larger than 10 MiB are rejected, and `Ctrl+C` cancels outstanding requests. If a baseline probe fails, candidates for that IP are still scanned with a similarity score of `0`.
 
@@ -117,7 +117,7 @@ This is a simple way to verify the tool works end-to-end on your machine.
    go run ./testserver
    ```
 
-   You can also use any HTTP server that returns different content based on the `Host` header. A target entry may include a port, for example `127.0.0.1:8080`.
+   You can also use any HTTP server that returns different content based on the `Host` header. A target entry may include a port, for example `127.0.0.1:8080`. Bare IPv6 addresses such as `2001:db8::1` are supported; use brackets when specifying an IPv6 port, for example `[2001:db8::1]:8080`.
 
 4. **Start scanning**
 
@@ -176,7 +176,7 @@ HostCollision 是一个通过自定义 `Host` 头，对目标 IP 进行批量请
 - 📡 **终端实时日志**：显示 IP、Host、状态码、耗时、相似度、过滤原因
 - 📄 **CSV 结果输出**：带表头，方便后续用 Excel / 脚本分析
 - ⚙️ **可配置参数**：线程数、请求间隔、相似度阈值、每 IP 最大命中数等
-- 🛡️ **安全的 HTTP 处理**：禁止跨目标重定向、支持取消，并限制响应体大小
+- 🛡️ **安全的 HTTP 处理**：禁止跨目标重定向、识别不同的重定向目标、支持取消，并限制响应体大小
 
 
 
@@ -247,7 +247,7 @@ ip,host,status,length,similar
 - `length`  – 响应 Body 长度（字节）
 - `similar` – 与该 IP 基准响应的相似度（0–100）
 
-程序仅保留状态码为 200–399 且相似度低于指定阈值的响应。扫描字典前，HostCollision 会向每个 IP 发送一次 `Host: hostcollision-baseline.invalid` 请求，以其响应作为默认页面基准；基准请求同样受并发数限制。
+程序仅保留状态码为 200–399 且相似度低于指定阈值的响应。扫描字典前，HostCollision 会向每个 IP 发送一次 `Host: hostcollision-baseline.invalid` 请求，以其响应作为默认页面基准；基准请求同样受并发数限制。普通响应使用 Body 计算相似度；对于重定向响应，还会比较状态码和 `Location` 响应头，避免把 Body 为空但跳转目标不同的重定向错误地过滤掉。
 
 为避免请求离开扫描范围，程序不会跟随重定向；超过 10 MiB 的响应体会被拒绝，按 `Ctrl+C` 可取消尚未完成的请求。如果某个 IP 的基准请求失败，该 IP 仍会继续扫描，候选响应的相似度记为 `0`。
 
@@ -277,7 +277,7 @@ www.ccc.com
 go run ./testserver
 ```
 
-也可以使用其他根据 `Host` 头返回不同页面的 HTTP 服务。IP 列表支持携带端口，例如 `127.0.0.1:8080`。
+也可以使用其他根据 `Host` 头返回不同页面的 HTTP 服务。IP 列表支持携带端口，例如 `127.0.0.1:8080`。同时支持裸 IPv6 地址，例如 `2001:db8::1`；IPv6 携带端口时请使用方括号，例如 `[2001:db8::1]:8080`。
 
 4. **执行扫描**
 
