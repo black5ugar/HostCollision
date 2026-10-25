@@ -72,6 +72,8 @@ func TestWriteResults(t *testing.T) {
 			Length:  123,
 			Similar: 42,
 			Title:   `用户中心, "Settings"`,
+			Port:    80,
+			Scheme:  "http",
 		},
 		{
 			IP:      model.IP("192.168.1.1"),
@@ -79,6 +81,8 @@ func TestWriteResults(t *testing.T) {
 			Status:  301,
 			Length:  456,
 			Similar: 10,
+			Port:    443,
+			Scheme:  "https",
 		},
 	}
 
@@ -96,9 +100,9 @@ func TestWriteResults(t *testing.T) {
 		t.Fatalf("invalid CSV output: %v", err)
 	}
 	want := [][]string{
-		{"ip", "host", "status", "length", "similar", "title"},
-		{"10.0.0.1", "www.example.com", "200", "123", "42", `用户中心, "Settings"`},
-		{"192.168.1.1", "test.example.org", "301", "456", "10", ""},
+		{"ip", "host", "status", "length", "similar", "title", "port", "scheme"},
+		{"10.0.0.1", "www.example.com", "200", "123", "42", `用户中心, "Settings"`, "80", "http"},
+		{"192.168.1.1", "test.example.org", "301", "456", "10", "", "443", "https"},
 	}
 	if !reflect.DeepEqual(records, want) {
 		t.Fatalf("unexpected CSV records: got %#v, want %#v", records, want)

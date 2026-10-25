@@ -20,6 +20,8 @@ type Result struct {
 	Length  int    // Length of the HTTP response body in bytes.
 	Similar int    // Similarity score in percentage (0-100).
 	Title   string // HTML page title, or empty when absent.
+	Port    int    // Target TCP port.
+	Scheme  string // HTTP or HTTPS URL scheme.
 
 	BodyHash string // Optional hash of the response body for deduplication.
 	Duration int64  // Request duration in milliseconds.

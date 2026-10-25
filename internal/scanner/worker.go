@@ -8,10 +8,7 @@ import (
 	"hostCollision/internal/model"
 	"io"
 	"log"
-	"net"
 	"net/http"
-	"net/netip"
-	"net/url"
 	"time"
 )
 
@@ -35,9 +32,9 @@ func (s *Scanner) worker(ctx context.Context, tasks <-chan task, results chan<- 
 				return
 			}
 
-			if s.reachedLimit(t.IP) {
-				log.Printf("[SKIP-LIMIT] ip=%s host=%s reason=max hosts per IP reached (%d)",
-					t.IP, t.Host, s.cfg.MaxHostsPerIP)
+			if s.reachedLimit(t.endpoint()) {
+				log.Printf("[SKIP-LIMIT] ip=%s port=%d scheme=%s host=%s reason=max hosts per IP/port reached (%d)",
+					t.IP, t.Port, t.Scheme, t.Host, s.cfg.MaxHostsPerIP)
 				continue
 			}
 
@@ -52,19 +49,19 @@ func (s *Scanner) worker(ctx context.Context, tasks <-chan task, results chan<- 
 			res := s.processTarget(ctx, t)
 
 			if res.Error != nil {
-				log.Printf("[SKIP] ip=%s host=%s status=%d duration=%dms similar=%d error=%v",
-					res.IP, res.Host, res.Status, res.Duration, res.Similar, res.Error)
+				log.Printf("[SKIP] ip=%s port=%d scheme=%s host=%s status=%d duration=%dms similar=%d error=%v",
+					res.IP, res.Port, res.Scheme, res.Host, res.Status, res.Duration, res.Similar, res.Error)
 				continue
 			}
 
-			if !s.claimSuccess(t.IP) {
-				log.Printf("[SKIP-LIMIT] ip=%s host=%s reason=max hosts per IP reached (%d)",
-					t.IP, t.Host, s.cfg.MaxHostsPerIP)
+			if !s.claimSuccess(t.endpoint()) {
+				log.Printf("[SKIP-LIMIT] ip=%s port=%d scheme=%s host=%s reason=max hosts per IP/port reached (%d)",
+					t.IP, t.Port, t.Scheme, t.Host, s.cfg.MaxHostsPerIP)
 				continue
 			}
 
-			log.Printf("[OK]   ip=%s host=%s status=%d duration=%dms length=%d similar=%d title=%q",
-				res.IP, res.Host, res.Status, res.Duration, res.Length, res.Similar, res.Title)
+			log.Printf("[OK]   ip=%s port=%d scheme=%s host=%s status=%d duration=%dms length=%d similar=%d title=%q",
+				res.IP, res.Port, res.Scheme, res.Host, res.Status, res.Duration, res.Length, res.Similar, res.Title)
 
 			select {
 			case <-ctx.Done():
@@ -81,13 +78,18 @@ func (s *Scanner) worker(ctx context.Context, tasks <-chan task, results chan<- 
 // configured threshold.
 func (s *Scanner) processTarget(ctx context.Context, t task) model.Result {
 	start := time.Now()
+	resolved, err := s.resolveTask(t)
+	if err != nil {
+		return model.Result{IP: t.IP, Host: t.Host, Port: t.Port, Scheme: t.Scheme, Error: err}
+	}
+	t = resolved
 	response, err := s.fetchResponse(ctx, t)
 	if err != nil {
-		return model.Result{IP: t.IP, Host: t.Host, Error: err, Duration: time.Since(start).Milliseconds()}
+		return model.Result{IP: t.IP, Port: t.Port, Scheme: t.Scheme, Host: t.Host, Error: err, Duration: time.Since(start).Milliseconds()}
 	}
 
 	result := model.Result{
-		IP: t.IP, Host: t.Host, Status: response.status, Length: len(response.body),
+		IP: t.IP, Port: t.Port, Scheme: t.Scheme, Host: t.Host, Status: response.status, Length: len(response.body),
 		BodyHash: bodyHash(response.body), Duration: time.Since(start).Milliseconds(),
 	}
 
@@ -96,7 +98,7 @@ func (s *Scanner) processTarget(ctx context.Context, t task) model.Result {
 		return result
 	}
 
-	score := s.similarityForIP(t.IP, response)
+	score := s.similarityForEndpoint(t.endpoint(), response)
 	result.Similar = score
 	if score >= s.cfg.Similarity {
 		result.Error = fmt.Errorf("response too similar to baseline: %d >= %d", score, s.cfg.Similarity)
@@ -107,12 +109,12 @@ func (s *Scanner) processTarget(ctx context.Context, t task) model.Result {
 }
 
 func (s *Scanner) fetchResponse(ctx context.Context, t task) (probeResponse, error) {
-	targetURL, err := buildTargetURL(string(t.IP))
+	t, err := s.resolveTask(t)
 	if err != nil {
 		return probeResponse{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL(t), nil)
 	if err != nil {
 		return probeResponse{}, fmt.Errorf("create request: %w", err)
 	}
@@ -139,19 +141,6 @@ func (s *Scanner) fetchResponse(ctx context.Context, t task) (probeResponse, err
 		status:   resp.StatusCode,
 		location: resp.Header.Get("Location"),
 	}, nil
-}
-
-func buildTargetURL(target string) (string, error) {
-	host := target
-	if addr, err := netip.ParseAddr(target); err == nil && addr.Is6() {
-		host = net.JoinHostPort(target, "80")
-	}
-
-	targetURL := url.URL{Scheme: "http", Host: host, Path: "/"}
-	if targetURL.Hostname() == "" {
-		return "", fmt.Errorf("invalid target IP %q", target)
-	}
-	return targetURL.String(), nil
 }
 
 // bodyHash computes a SHA-1 hash of the given response body.

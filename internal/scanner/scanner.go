@@ -19,17 +19,19 @@ type Scanner struct {
 	httpClient *http.Client
 	scanMu     sync.Mutex
 
-	muSuccess    sync.Mutex
-	successPerIP map[model.IP]int
+	muSuccess          sync.Mutex
+	successPerEndpoint map[endpoint]int
 
-	muBaseline   sync.Mutex
-	baselineByIP map[model.IP]probeResponse
+	muBaseline         sync.Mutex
+	baselineByEndpoint map[endpoint]probeResponse
 }
 
 // task represents one scanning unit consisting of an IP and a host.
 type task struct {
-	IP   model.IP
-	Host model.Host
+	IP     model.IP
+	Host   model.Host
+	Port   int
+	Scheme string
 }
 
 // NewScanner creates a new Scanner with the given configuration.
@@ -37,8 +39,14 @@ func NewScanner(cfg config.Config) *Scanner {
 	if cfg.Goroutines < 1 {
 		cfg.Goroutines = 1
 	}
+	if cfg.HTTPSPorts == nil {
+		cfg.HTTPSPorts = []int{443, 8443}
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil // Connect directly to the selected IP.
 	client := &http.Client{
-		Timeout: 10 * time.Second,
+		Transport: &probeTransport{http: transport, insecure: cfg.Insecure},
+		Timeout:   10 * time.Second,
 		// A redirect may point at an unrelated host. Keep every probe pinned to
 		// the target IP and evaluate the redirect response itself.
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -47,10 +55,10 @@ func NewScanner(cfg config.Config) *Scanner {
 	}
 
 	return &Scanner{
-		cfg:          cfg,
-		httpClient:   client,
-		successPerIP: make(map[model.IP]int),
-		baselineByIP: make(map[model.IP]probeResponse),
+		cfg:                cfg,
+		httpClient:         client,
+		successPerEndpoint: make(map[endpoint]int),
+		baselineByEndpoint: make(map[endpoint]probeResponse),
 	}
 }
 
@@ -67,9 +75,14 @@ func (s *Scanner) Scan(ctx context.Context, ips []model.IP, hosts []model.Host) 
 	// safe and deterministic.
 	s.scanMu.Lock()
 	defer s.scanMu.Unlock()
+	defer s.httpClient.CloseIdleConnections()
 	s.resetScanState()
 
-	if err := s.loadBaselines(ctx, ips); err != nil {
+	endpoints, err := s.expandTargets(ips)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.loadBaselines(ctx, endpoints); err != nil {
 		return nil, err
 	}
 
@@ -88,12 +101,12 @@ func (s *Scanner) Scan(ctx context.Context, ips []model.IP, hosts []model.Host) 
 
 	go func() {
 		defer close(tasks)
-		for _, ip := range ips {
+		for _, target := range endpoints {
 			for _, host := range hosts {
 				select {
 				case <-ctx.Done():
 					return
-				case tasks <- task{IP: ip, Host: host}:
+				case tasks <- target.task(host):
 				}
 			}
 		}
@@ -119,29 +132,29 @@ func (s *Scanner) Scan(ctx context.Context, ips []model.IP, hosts []model.Host) 
 
 func (s *Scanner) resetScanState() {
 	s.muSuccess.Lock()
-	s.successPerIP = make(map[model.IP]int)
+	s.successPerEndpoint = make(map[endpoint]int)
 	s.muSuccess.Unlock()
 
 	s.muBaseline.Lock()
-	s.baselineByIP = make(map[model.IP]probeResponse)
+	s.baselineByEndpoint = make(map[endpoint]probeResponse)
 	s.muBaseline.Unlock()
 }
 
-// loadBaselines probes each IP with a deliberately invalid hostname. This
+// loadBaselines probes each IP/port with a deliberately invalid hostname. This
 // prevents a real dictionary entry from being consumed as the baseline.
-func (s *Scanner) loadBaselines(ctx context.Context, ips []model.IP) error {
-	jobs := make(chan model.IP)
+func (s *Scanner) loadBaselines(ctx context.Context, endpoints []endpoint) error {
+	jobs := make(chan endpoint)
 	var wg sync.WaitGroup
 	workers := s.cfg.Goroutines
-	if workers > len(ips) {
-		workers = len(ips)
+	if workers > len(endpoints) {
+		workers = len(endpoints)
 	}
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for ip := range jobs {
-				response, err := s.fetchResponse(ctx, task{IP: ip, Host: model.Host(baselineHost)})
+			for target := range jobs {
+				response, err := s.fetchResponse(ctx, target.task(model.Host(baselineHost)))
 				if err != nil {
 					// A missing baseline should not make the target unscannable.
 					// Its candidates will receive similarity zero.
@@ -149,19 +162,19 @@ func (s *Scanner) loadBaselines(ctx context.Context, ips []model.IP) error {
 				}
 				response.body = append([]byte(nil), response.body...)
 				s.muBaseline.Lock()
-				s.baselineByIP[ip] = response
+				s.baselineByEndpoint[target] = response
 				s.muBaseline.Unlock()
 			}
 		}()
 	}
 
-	for _, ip := range ips {
+	for _, target := range endpoints {
 		select {
 		case <-ctx.Done():
 			close(jobs)
 			wg.Wait()
 			return ctx.Err()
-		case jobs <- ip:
+		case jobs <- target:
 		}
 	}
 	close(jobs)
@@ -170,32 +183,32 @@ func (s *Scanner) loadBaselines(ctx context.Context, ips []model.IP) error {
 }
 
 // reachedLimit reports whether the maximum number of successful hosts
-// has been reached for the given IP.
-func (s *Scanner) reachedLimit(ip model.IP) bool {
+// has been reached for the given IP/port.
+func (s *Scanner) reachedLimit(target endpoint) bool {
 	s.muSuccess.Lock()
 	defer s.muSuccess.Unlock()
 
-	return s.successPerIP[ip] >= s.cfg.MaxHostsPerIP
+	return s.successPerEndpoint[target] >= s.cfg.MaxHostsPerIP
 }
 
 // claimSuccess reserves a result slot without allowing concurrent workers to
-// exceed the configured per-IP limit.
-func (s *Scanner) claimSuccess(ip model.IP) bool {
+// exceed the configured per-IP/port limit.
+func (s *Scanner) claimSuccess(target endpoint) bool {
 	s.muSuccess.Lock()
 	defer s.muSuccess.Unlock()
-	if s.successPerIP[ip] >= s.cfg.MaxHostsPerIP {
+	if s.successPerEndpoint[target] >= s.cfg.MaxHostsPerIP {
 		return false
 	}
-	s.successPerIP[ip]++
+	s.successPerEndpoint[target]++
 	return true
 }
 
-// similarityForIP returns the similarity score between the dedicated baseline
-// response for the given IP and the candidate response. Redirect metadata is
+// similarityForEndpoint returns the similarity score between the dedicated baseline
+// response for the given IP/port and the candidate response. Redirect metadata is
 // significant because redirects commonly have an empty or generic body.
-func (s *Scanner) similarityForIP(ip model.IP, candidate probeResponse) int {
+func (s *Scanner) similarityForEndpoint(target endpoint, candidate probeResponse) int {
 	s.muBaseline.Lock()
-	base, ok := s.baselineByIP[ip]
+	base, ok := s.baselineByEndpoint[target]
 	s.muBaseline.Unlock()
 	if !ok {
 		return 0
