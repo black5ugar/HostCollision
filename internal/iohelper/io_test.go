@@ -1,9 +1,12 @@
 package iohelper
 
 import (
+	"encoding/csv"
 	"hostCollision/internal/model"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -55,7 +58,8 @@ func TestReadHosts(t *testing.T) {
 	}
 }
 
-// TestWriteResults verifies that WriteResults writes the expected number of lines.
+// TestWriteResults verifies the CSV schema and title escaping, including an
+// absent title and a title containing Unicode, commas, and quotation marks.
 func TestWriteResults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "output.txt")
@@ -67,6 +71,9 @@ func TestWriteResults(t *testing.T) {
 			Status:  200,
 			Length:  123,
 			Similar: 42,
+			Title:   `用户中心, "Settings"`,
+			Port:    80,
+			Scheme:  "http",
 		},
 		{
 			IP:      model.IP("192.168.1.1"),
@@ -74,6 +81,8 @@ func TestWriteResults(t *testing.T) {
 			Status:  301,
 			Length:  456,
 			Similar: 10,
+			Port:    443,
+			Scheme:  "https",
 		},
 	}
 
@@ -86,14 +95,16 @@ func TestWriteResults(t *testing.T) {
 		t.Fatalf("failed to read output file: %v", err)
 	}
 
-	lines := 0
-	for _, b := range data {
-		if b == '\n' {
-			lines++
-		}
+	records, err := csv.NewReader(strings.NewReader(string(data))).ReadAll()
+	if err != nil {
+		t.Fatalf("invalid CSV output: %v", err)
 	}
-
-	if lines != len(results)+1 {
-		t.Fatalf("expected %d lines, got %d", len(results)+1, lines)
+	want := [][]string{
+		{"ip", "host", "status", "length", "similar", "title", "port", "scheme"},
+		{"10.0.0.1", "www.example.com", "200", "123", "42", `用户中心, "Settings"`, "80", "http"},
+		{"192.168.1.1", "test.example.org", "301", "456", "10", "", "443", "https"},
+	}
+	if !reflect.DeepEqual(records, want) {
+		t.Fatalf("unexpected CSV records: got %#v, want %#v", records, want)
 	}
 }

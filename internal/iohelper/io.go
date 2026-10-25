@@ -41,7 +41,7 @@ func ReadHosts(path string) ([]model.Host, error) {
 }
 
 // WriteResults writes scan results to the specified file in CSV format.
-// The first row contains the header: ip, host, status, length, similar.
+// The first row contains the header: ip, host, status, length, similar, title, port, scheme.
 func WriteResults(path string, results []model.Result) (returnErr error) {
 	file, err := os.Create(path)
 	if err != nil {
@@ -56,7 +56,7 @@ func WriteResults(path string, results []model.Result) (returnErr error) {
 	writer := csv.NewWriter(file)
 
 	// Header row.
-	if err := writer.Write([]string{"ip", "host", "status", "length", "similar"}); err != nil {
+	if err := writer.Write([]string{"ip", "host", "status", "length", "similar", "title", "port", "scheme"}); err != nil {
 		return fmt.Errorf("write header: %w", err)
 	}
 
@@ -67,6 +67,9 @@ func WriteResults(path string, results []model.Result) (returnErr error) {
 			strconv.Itoa(r.Status),
 			strconv.Itoa(r.Length),
 			strconv.Itoa(r.Similar),
+			r.Title,
+			strconv.Itoa(r.Port),
+			r.Scheme,
 		}
 		if err := writer.Write(record); err != nil {
 			return fmt.Errorf("write result for %s %s: %w", r.IP, r.Host, err)

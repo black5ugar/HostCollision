@@ -13,8 +13,9 @@ This version is a fully refactored and modularized implementation based on the o
 
 - 🚀 **High-speed scanning** powered by goroutine worker pool  
 - 🧠 **Dedicated baseline probes** to filter out generic/wildcard/default pages without consuming a real candidate
-- 📝 **Real-time terminal logs** showing status code, duration, and similarity  
+- 📝 **Real-time terminal logs** showing status code, duration, similarity, and page title
 - 📄 **CSV result output** for better data analysis  
+- 🔌 **Multi-port HTTP/HTTPS scanning** with per-service baselines and candidate TLS SNI
 - ⚙️ **Configurable parameters** (threads, sleep, threshold, max hits per IP…)  
 - 🛡️ **Safer HTTP handling** with redirect blocking, redirect-aware fingerprints, cancellation support, and a 10 MiB response limit
 - 🎨 **Beautiful CLI banner**
@@ -62,17 +63,34 @@ go test ./...
 | `-o`   | Output CSV file path (required)             |
 | `-n`   | Number of goroutines (default 20)           |
 | `-s`   | Sleep between requests in ms (default 1000) |
-| `-m`   | Max retained hosts per IP (default 50)      |
+| `-m`   | Max retained hosts per IP/port (default 50) |
 | `-r`   | Similarity threshold (0–100, default 85)    |
+| `-p` | Comma-separated ports for bare IP entries (default `80`) |
+| `-https-ports` | Ports using HTTPS (default `443,8443`; empty for HTTP only) |
+| `-insecure` | Allow untrusted or mismatched candidate TLS certificates (default `false`) |
 
 
+
+## 🔌 Multiple Ports and HTTPS
+
+```bash
+./hostcollision -i ip.txt -d host.txt -o output.csv -p 80,443,8080 -s 0
+```
+
+Without `-p`, bare IP entries use port 80. An explicit port in `ip.txt`, such as `127.0.0.1:8080` or `[2001:db8::1]:8443`, takes precedence over `-p` for that entry. Duplicate IP/port combinations are scanned once; port lists accept integers from 1 through 65535.
+
+Ports 443 and 8443 use HTTPS by default; other ports use HTTP. For a custom HTTPS service, use `-p 9443 -https-ports 9443` (the HTTPS port list selects the protocol, not additional scan ports). Use `-https-ports ""` for HTTP on every selected port.
+
+HTTPS connections go to the target IP and send the candidate hostname as TLS SNI and the dictionary entry as HTTP Host. Each HTTPS probe uses a separate connection to keep SNI selection independent. Candidate certificates are verified by default; add `-insecure` for self-signed, untrusted, or mismatched certificates. The synthetic baseline probe skips certificate verification because its deliberately invalid hostname cannot match a certificate. Redirects remain unfollowed.
+
+Baselines and the `-m` hit limit are independent for each IP/port, so a busy service on port 80 does not consume the slots for port 443.
 
 ## 📤 Output
 
 output.csv will contain:
 ```
-ip,host,status,length,similar
-127.0.0.1,www.example.com,200,7648,32
+ip,host,status,length,similar,title,port,scheme
+127.0.0.1,www.example.com,200,7648,32,Example Domain,80,http
 ```
 
 `ip`      – target IP address
@@ -83,11 +101,17 @@ ip,host,status,length,similar
 
 `length`  – response body length (bytes)
 
-`similar` – similarity score (0–100) compared to baseline for that IP
+`similar` – similarity score (0–100) compared to baseline for that IP/port
 
-Only responses with status codes from 200 through 399 and similarity below the configured threshold are retained. Before scanning the dictionary, HostCollision sends `Host: hostcollision-baseline.invalid` to each IP and uses that response as the default-page baseline. Baseline probes run with the configured concurrency limit. Response bodies are used for the normal similarity score; for redirects, the status code and `Location` header are also compared so that different empty-body redirects are not incorrectly treated as identical.
+`title`   – first HTML `<title>` in the scan response, empty if absent. HTML entities are decoded and whitespace is collapsed. Titles are extracted from the existing response without extra requests or JavaScript execution; redirect titles come from the redirect response itself. Successful terminal logs also include `title="..."`.
 
-For safety, redirects are not followed, response bodies larger than 10 MiB are rejected, and `Ctrl+C` cancels outstanding requests. If a baseline probe fails, candidates for that IP are still scanned with a similarity score of `0`.
+`port`    – target TCP port
+
+`scheme`  – `http` or `https`
+
+Only responses with status codes from 200 through 399 and similarity below the configured threshold are retained. Before scanning the dictionary, HostCollision sends `Host: hostcollision-baseline.invalid` to each IP/port and uses that response as the default-page baseline. Baseline probes run with the configured concurrency limit. Response bodies are used for the normal similarity score; for redirects, the status code and `Location` header are also compared so that different empty-body redirects are not incorrectly treated as identical.
+
+For safety, redirects are not followed, response bodies larger than 10 MiB are rejected, and `Ctrl+C` cancels outstanding requests. If a baseline probe fails, candidates for that IP/port are still scanned with a similarity score of `0`.
 
 
 
@@ -173,9 +197,10 @@ HostCollision 是一个通过自定义 `Host` 头，对目标 IP 进行批量请
 - 🚀 **高并发扫描**：基于 goroutine 的 worker pool
 - 🧠 **响应相似度检测**：过滤统一错误页 / 默认页 / 泛解析内容
 - 🎯 **独立基准探测**：使用专门的无效 Host 获取基准，不占用真实字典候选
-- 📡 **终端实时日志**：显示 IP、Host、状态码、耗时、相似度、过滤原因
+- 📡 **终端实时日志**：显示 IP、Host、状态码、耗时、相似度、网页标题、过滤原因
 - 📄 **CSV 结果输出**：带表头，方便后续用 Excel / 脚本分析
-- ⚙️ **可配置参数**：线程数、请求间隔、相似度阈值、每 IP 最大命中数等
+- 🔌 **多端口 HTTP/HTTPS 扫描**：独立服务基准与命中上限，HTTPS 支持候选域名 SNI
+- ⚙️ **可配置参数**：线程数、请求间隔、相似度阈值、每 IP/端口最大命中数等
 - 🛡️ **安全的 HTTP 处理**：禁止跨目标重定向、识别不同的重定向目标、支持取消，并限制响应体大小
 
 
@@ -225,18 +250,35 @@ go test ./...
 | `-o` | 输出 CSV 文件路径（必选）                                    |
 | `-n` | 并发 goroutine 数量（默认 `20`）                             |
 | `-s` | 每次请求间的 sleep（毫秒，默认 `1000`）                      |
-| `-m` | 单个 IP 最多保留的 Host 数（默认 `50`）                      |
+| `-m` | 单个 IP/端口最多保留的 Host 数（默认 `50`）                      |
 | `-r` | 相似度阈值（0–100，默认 `85`，大于等于该值认为“过于相似”而被过滤） |
+| `-p` | 扫描端口，逗号分隔；未指定时裸 IP 使用 `80` |
+| `-https-ports` | 使用 HTTPS 的端口（默认 `443,8443`；传空字符串表示全部使用 HTTP） |
+| `-insecure` | 允许不受信任或域名不匹配的候选 TLS 证书（默认关闭） |
 
 
+
+## 🔌 多端口与 HTTPS
+
+```bash
+./hostcollision -i ip.txt -d host.txt -o output.csv -p 80,443,8080 -s 0
+```
+
+不传 `-p` 时，裸 IP 默认扫描 80 端口。IP 文件中明确写出的端口优先，例如 `127.0.0.1:8080` 或 `[2001:db8::1]:8443`；这类条目不会再展开为 `-p` 中的其他端口。重复的 IP/端口只扫描一次。端口取值范围为 1–65535。
+
+443、8443 默认使用 HTTPS，其他端口使用 HTTP。自定义 HTTPS 端口可以写成 `-p 9443 -https-ports 9443`；`-https-ports` 只指定协议，不会额外增加扫描端口。传 `-https-ports ""` 可让所有选中端口都使用 HTTP。
+
+HTTPS 始终连接目标 IP，将候选域名用作 TLS SNI，并将字典条目用作 HTTP Host。每次 HTTPS 探测使用独立连接，避免复用其他候选域名的 SNI。默认校验候选站点的 TLS 证书；自签名、不受信任或域名不匹配的证书可添加 `-insecure`。独立基准探测使用无效域名，因此该基准请求跳过证书校验。程序仍不会跟随重定向。
+
+每个 IP/端口分别建立基准，并分别应用 `-m` 命中上限，避免某个端口占满其他端口的结果名额。
 
 ## 📤 输出说明
 
 结果文件为 CSV 格式，包含表头：
 
 ```
-ip,host,status,length,similar
-127.0.0.1,www.example.com,200,7648,32
+ip,host,status,length,similar,title,port,scheme
+127.0.0.1,www.example.com,200,7648,32,Example Domain,80,http
 ```
 
 字段含义：
@@ -245,11 +287,16 @@ ip,host,status,length,similar
 - `host`    – 请求使用的 Host 头
 - `status`  – HTTP 状态码
 - `length`  – 响应 Body 长度（字节）
-- `similar` – 与该 IP 基准响应的相似度（0–100）
+- `similar` – 与该 IP/端口基准响应的相似度（0–100）
+- `title`   – 扫描响应中第一个 HTML `<title>` 的内容；没有标题时留空。自动解码 HTML 实体并合并多余空白。
+- `port`    – 目标 TCP 端口
+- `scheme`  – 请求协议，`http` 或 `https`
 
-程序仅保留状态码为 200–399 且相似度低于指定阈值的响应。扫描字典前，HostCollision 会向每个 IP 发送一次 `Host: hostcollision-baseline.invalid` 请求，以其响应作为默认页面基准；基准请求同样受并发数限制。普通响应使用 Body 计算相似度；对于重定向响应，还会比较状态码和 `Location` 响应头，避免把 Body 为空但跳转目标不同的重定向错误地过滤掉。
+标题直接从已有响应提取，不会额外请求，也不会执行 JavaScript。对于重定向，只读取重定向响应本身的标题。终端成功日志也会显示 `title="..."`。
 
-为避免请求离开扫描范围，程序不会跟随重定向；超过 10 MiB 的响应体会被拒绝，按 `Ctrl+C` 可取消尚未完成的请求。如果某个 IP 的基准请求失败，该 IP 仍会继续扫描，候选响应的相似度记为 `0`。
+程序仅保留状态码为 200–399 且相似度低于指定阈值的响应。扫描字典前，HostCollision 会向每个 IP/端口发送一次 `Host: hostcollision-baseline.invalid` 请求，以其响应作为默认页面基准；基准请求同样受并发数限制。普通响应使用 Body 计算相似度；对于重定向响应，还会比较状态码和 `Location` 响应头，避免把 Body 为空但跳转目标不同的重定向错误地过滤掉。
+
+为避免请求离开扫描范围，程序不会跟随重定向；超过 10 MiB 的响应体会被拒绝，按 `Ctrl+C` 可取消尚未完成的请求。如果某个 IP/端口的基准请求失败，该 IP/端口仍会继续扫描，候选响应的相似度记为 `0`。
 
 
 
