@@ -13,7 +13,7 @@ This version is a fully refactored and modularized implementation based on the o
 
 - 🚀 **High-speed scanning** powered by goroutine worker pool  
 - 🧠 **Dedicated baseline probes** to filter out generic/wildcard/default pages without consuming a real candidate
-- 📝 **Real-time terminal logs** showing status code, duration, and similarity  
+- 📝 **Real-time terminal logs** showing status code, duration, similarity, and page title
 - 📄 **CSV result output** for better data analysis  
 - ⚙️ **Configurable parameters** (threads, sleep, threshold, max hits per IP…)  
 - 🛡️ **Safer HTTP handling** with redirect blocking, redirect-aware fingerprints, cancellation support, and a 10 MiB response limit
@@ -71,8 +71,8 @@ go test ./...
 
 output.csv will contain:
 ```
-ip,host,status,length,similar
-127.0.0.1,www.example.com,200,7648,32
+ip,host,status,length,similar,title
+127.0.0.1,www.example.com,200,7648,32,Example Domain
 ```
 
 `ip`      – target IP address
@@ -84,6 +84,8 @@ ip,host,status,length,similar
 `length`  – response body length (bytes)
 
 `similar` – similarity score (0–100) compared to baseline for that IP
+
+`title`   – first HTML `<title>` in the scan response, empty if absent. HTML entities are decoded and whitespace is collapsed. Titles are extracted from the existing response without extra requests or JavaScript execution; redirect titles come from the redirect response itself. Successful terminal logs also include `title="..."`.
 
 Only responses with status codes from 200 through 399 and similarity below the configured threshold are retained. Before scanning the dictionary, HostCollision sends `Host: hostcollision-baseline.invalid` to each IP and uses that response as the default-page baseline. Baseline probes run with the configured concurrency limit. Response bodies are used for the normal similarity score; for redirects, the status code and `Location` header are also compared so that different empty-body redirects are not incorrectly treated as identical.
 
@@ -173,7 +175,7 @@ HostCollision 是一个通过自定义 `Host` 头，对目标 IP 进行批量请
 - 🚀 **高并发扫描**：基于 goroutine 的 worker pool
 - 🧠 **响应相似度检测**：过滤统一错误页 / 默认页 / 泛解析内容
 - 🎯 **独立基准探测**：使用专门的无效 Host 获取基准，不占用真实字典候选
-- 📡 **终端实时日志**：显示 IP、Host、状态码、耗时、相似度、过滤原因
+- 📡 **终端实时日志**：显示 IP、Host、状态码、耗时、相似度、网页标题、过滤原因
 - 📄 **CSV 结果输出**：带表头，方便后续用 Excel / 脚本分析
 - ⚙️ **可配置参数**：线程数、请求间隔、相似度阈值、每 IP 最大命中数等
 - 🛡️ **安全的 HTTP 处理**：禁止跨目标重定向、识别不同的重定向目标、支持取消，并限制响应体大小
@@ -235,8 +237,8 @@ go test ./...
 结果文件为 CSV 格式，包含表头：
 
 ```
-ip,host,status,length,similar
-127.0.0.1,www.example.com,200,7648,32
+ip,host,status,length,similar,title
+127.0.0.1,www.example.com,200,7648,32,Example Domain
 ```
 
 字段含义：
@@ -246,6 +248,9 @@ ip,host,status,length,similar
 - `status`  – HTTP 状态码
 - `length`  – 响应 Body 长度（字节）
 - `similar` – 与该 IP 基准响应的相似度（0–100）
+- `title`   – 扫描响应中第一个 HTML `<title>` 的内容；没有标题时留空。自动解码 HTML 实体并合并多余空白。
+
+标题直接从已有响应提取，不会额外请求，也不会执行 JavaScript。对于重定向，只读取重定向响应本身的标题。终端成功日志也会显示 `title="..."`。
 
 程序仅保留状态码为 200–399 且相似度低于指定阈值的响应。扫描字典前，HostCollision 会向每个 IP 发送一次 `Host: hostcollision-baseline.invalid` 请求，以其响应作为默认页面基准；基准请求同样受并发数限制。普通响应使用 Body 计算相似度；对于重定向响应，还会比较状态码和 `Location` 响应头，避免把 Body 为空但跳转目标不同的重定向错误地过滤掉。
 

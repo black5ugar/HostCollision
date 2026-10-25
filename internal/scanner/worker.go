@@ -63,8 +63,8 @@ func (s *Scanner) worker(ctx context.Context, tasks <-chan task, results chan<- 
 				continue
 			}
 
-			log.Printf("[OK]   ip=%s host=%s status=%d duration=%dms length=%d similar=%d",
-				res.IP, res.Host, res.Status, res.Duration, res.Length, res.Similar)
+			log.Printf("[OK]   ip=%s host=%s status=%d duration=%dms length=%d similar=%d title=%q",
+				res.IP, res.Host, res.Status, res.Duration, res.Length, res.Similar, res.Title)
 
 			select {
 			case <-ctx.Done():
@@ -100,7 +100,9 @@ func (s *Scanner) processTarget(ctx context.Context, t task) model.Result {
 	result.Similar = score
 	if score >= s.cfg.Similarity {
 		result.Error = fmt.Errorf("response too similar to baseline: %d >= %d", score, s.cfg.Similarity)
+		return result
 	}
+	result.Title = extractTitle(response.body)
 	return result
 }
 

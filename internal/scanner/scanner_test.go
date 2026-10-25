@@ -1,9 +1,11 @@
 package scanner
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -12,6 +14,43 @@ import (
 	"hostCollision/internal/config"
 	"hostCollision/internal/model"
 )
+
+func TestScanIncludesTitleWithoutExtraRequests(t *testing.T) {
+	var requests atomic.Int32
+	var logs bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
+	s := NewScanner(config.Config{Goroutines: 1, Similarity: 85, MaxHostsPerIP: 10})
+	const body = "<html><title> 用户中心 &amp; Settings\n</title><body>Account page</body></html>"
+	s.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests.Add(1)
+		if req.Host == baselineHost {
+			return response(http.StatusOK, "default response"), nil
+		}
+		return response(http.StatusOK, body), nil
+	})
+
+	results, err := s.Scan(context.Background(), []model.IP{"192.0.2.1"}, []model.Host{"account.example"})
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected one result, got %#v", results)
+	}
+	if got := results[0].Title; got != "用户中心 & Settings" {
+		t.Fatalf("unexpected title: %q", got)
+	}
+	if results[0].Length != len(body) || results[0].BodyHash != bodyHash([]byte(body)) {
+		t.Fatal("title extraction changed the original response fingerprint")
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("expected one baseline and one candidate request, got %d", got)
+	}
+	if !strings.Contains(logs.String(), `title="用户中心 & Settings"`) {
+		t.Fatalf("success log is missing the title: %s", logs.String())
+	}
+}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
